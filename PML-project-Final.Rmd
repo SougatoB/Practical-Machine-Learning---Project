@@ -1,0 +1,488 @@
+---
+title: "PML-Project-Final"
+output: html_document
+---
+
+The relevant data are the data from the Weight Lifting Exercise Dataset for accelerometer readings on the belt, forearm, arm and dumbell for the participants. The source reference for the data is http://groupware.les.inf.puc-rio.br/har 
+
+The goal for the project is to use the provided data to determine how well the activities (exercises) are performed.  We are given a training set and a testing set (links below).
+
+1. EXPLORATORY OVERVIEW
+=======================
+
+The training set was preprocessed and the same preprocessing parameters were applied to the testing set. Before model training, the training data was further split into "training" and "validation" sets, for an understanding of how well our model performed on unseen data. This evaluation served as metrics for selecting the algorithm to move forward with in our predictions for the testing set.
+
+For the training set, the response variable is "classe". In the reference, the exercises performed are divided into 5 classes, A through E. Only Class A corresponds to the correct performance of the exercise, that is, the exercises are performed per the specifications.
+
+(The training and test sets can be found at the following links provided by Coursera:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+Source Reference: http://groupware.les.inf.puc-rio.br/har )
+
+
+Loading the training dataset:
+
+```{r}
+library(caret)
+# loading the training data
+trInit <- read.csv("pml-training.csv")
+# data dimensions and structure
+ dim(trInit)
+# str(trInit)
+# variable names
+# names(trInit)
+```
+
+Loading the testing dataset:
+
+```{r}
+# loading the training data
+testInit <- read.csv("pml-testing.csv")
+# data dimensions and structure
+dim(testInit)
+# str(testInit)
+# variable names
+# names(testInit)
+```
+
+Both the training sets and testing sets are in data frame format. Both have the same number of variables; there are 19622 observations in the training set and 20 observations in the testing set.
+
+The activities to consider would be the activities corresponding to the information from belt, forearm, arm and dumbell, while a few of the variables do not seem to correspond to these names and are likely not relevant for our learning.
+
+Checking for any differences in the variable names and classes of both the data frames.
+
+```{r}
+# exploring if variable names are the same
+which(names(trInit) != names(testInit))
+# exploring if the classes for the variables are the same
+which(cbind(sapply(trInit, class)) != cbind(sapply(testInit, class)))
+```
+
+It looks like the last variable is different for the two sets.
+
+Also, several variables have different classes between the two sets. 
+
+The last variable in the training set is "classe" and corresponds to the response variable. The last variable in the testing set is "problem_id", and seems to correspond to an index of numbers.
+
+Taking a closer look at the differences in the last variable in the two sets:
+
+```{r}
+# class for the training set, last variable
+class(trInit[,160])
+# class for the testing set, last variable
+class(testInit[ ,160])
+```
+
+For the training set, the response variable is of class character, while this should be a factor variable, since a classification is being performed, and we are distinguishing activities by their respective classes, A through E.
+
+
+2. PREPROCESSING STEPS
+======================
+
+
+For the preprocessing steps, we filter for the relevant variables, which includes subsetting for the relevant predictors, removing the zero and near-zero variables, removing correlated predictors, and checking for linear dependencies. Each of these are described in the sections below.
+
+(Workflow Reference: https://topepo.github.io/caret/pre-processing.html)
+
+
+## 2.1 Filtering for the relevant variables and converting the response var to factor
+
+
+For the variables in the training and testing sets, the first 7 columns do not seem to pertain to this data, as they don't seem to be associated with readings on the belt, forearm, arm or dumbell; therefore these variables are removed from the training and testing sets.
+
+Training:
+```{r}
+# taking out the first 7 columns as these don't seem to contain the data
+trInit <- trInit[,-c(1:7)]
+# dimensions
+dim(trInit)
+```
+
+Testing:
+```{r}
+testInit <- testInit[,-c(1:7)]
+dim(testInit)
+```
+
+
+For the response variable for the training set, "classe", we change its class to factor. 
+
+For ease of manipulation through the preprocessing steps, for last variable in the testing set, "problem_id", we rename this as "classe" and change its class to factor. (This is only for ease of manipulation, and does not affect our process.)
+
+Training data:
+```{r}
+# convert classe to factor
+trInit$classe <- factor(trInit$classe)
+# this shows that the 5 levels have been created
+str(trInit$classe)
+# description of the levels
+contrasts(trInit$classe)
+```
+
+
+Testing data
+```{r}
+library(dplyr)
+testInit$problem_id <- as.factor(testInit$problem_id)
+testInit <- rename(testInit, classe = problem_id)
+# not necessary, so removed
+# str(testInit1$classe)
+```
+
+
+## 2.2 Getting rid of zero and near-zero variance predictors
+
+
+Getting rid of the zero and near-zero variance predictors in the training set:
+
+```{r}
+# identifying the near-zero-variance variables with the nearZeroVar function
+nzv <- nearZeroVar(trInit, saveMetrics = TRUE)
+# taking a look at the variables, and freqRAtio, percentUnique, zeroVar and nzv columns
+# nzv[nzv$nzv,]
+# checking the number of vars to be removed
+# dim(nzv[nzv$nzv,])
+# removing the near zero and zero variance variables
+nzv <- nearZeroVar(trInit)
+trInit1 <- trInit[,-nzv]
+# checking for dimensions of the new data frame
+dim(trInit); dim(trInit1)
+# now there are 94 vars
+```
+
+Subsetting the testing set to include the exact same variables as the training set:
+
+```{r}
+# has all 94 vars
+testInit1 <- testInit[,-nzv]
+# checking for dimensions of the new data frame
+dim(testInit); dim(testInit1)
+# now there are 94 vars
+```
+
+
+## 2.3 Identifying Correlated Predictors
+
+
+Correlation function will only work on numeric predictors. Also, if there are NAs in the data frame, the correlation function fails to work.
+
+# 2.3.1 Removing the variables with >95% NAs
+
+
+The first step would be to drop the variables in the training set that have >95% NA values. (For these variables, imputation would not really make sense, since > 95% of the data is missing, and so this may lead to inaccuracies). 
+
+For the training data:
+
+```{r}
+# identifying how many predictors are there that have over 95% NA values. 
+sum(colMeans(is.na(trInit1)) > 0.95)
+# identifying which columns these are
+mostlyNAs <- which(colMeans(is.na(trInit1)) > 0.95)
+# making a new data frame by dropping these columns
+trInit2 <- trInit1[ ,-mostlyNAs]
+# checking dimensions - now there are 56 columns that are numeric
+dim(trInit2)
+# 53 total vars
+```
+
+Now we subset for the same variables for the testing data:
+
+```{r}
+# dropping the columns that were not used in the training set
+testInit2 <- testInit1[ ,-mostlyNAs]
+# verifying that the number of columns stay the same
+dim(testInit2)
+# has 53 variables
+# making sure all vars in the training set are there in the test set
+sum(names(trInit2) != names(testInit2))
+```
+
+
+# 2.3.2 Class check for testing set
+
+
+It was seen in the Exploratory Overview section that there are variables in the testing set which had different classes from the training set. 
+
+We know that the last var in both the training and testing sets are factors, and that 52 of the remaining variables in the training set are numeric. 
+
+It would be important to know how many of the 52 remaining variables in the testing set are numeric (and non-numeric).
+
+```{r}
+# checking for number of numerics in the training set
+ncol(trInit2 %>% dplyr::select(where(is.numeric)))
+# checking for number of numerics in the testing set
+ncol(testInit2 %>% dplyr::select(where(is.numeric)))
+# checking for number of non-numerics in the training set
+ncol(trInit2 %>% dplyr::select(!where(is.numeric)))
+# checking for number of non-numerics in the testing set
+ncol(testInit2 %>% dplyr::select(!where(is.numeric)))
+# double-checking both to make sure
+# str(trInit2); str(testInit2)
+```
+
+It turns out, that after removing the columns in the testing set in the previous step, the remaining testing set "testInit2" columns are only numeric columns, other than the last one (which we had converted to factor for ease of preprocessing). Because of this, no further processing of the testing set is necessary before moving to the next steps.
+
+To summarize this part, both the training set and the testing set have 52 numeric variables (and the last variable is non-numeric for both).
+
+
+(Side note: Had any columns existed in the testing set that were not numeric, we would have considered converting them to numeric, in order to align with the classes of the variables in the training set.)
+
+
+
+# 2.3.3 Identifying the correlated predictors and removing them
+
+
+The cutoff for the correlation was selected to be 0.75. The training set was subsetted to remove these correlated predictors.
+
+```{r}
+# sorting for numeric predictors so that we can look at correlation
+descCor <- cor(trInit2[,-53])
+# using a cutoff of 0.75 for correlated predictors
+highlyCorDescr <- findCorrelation(descCor, cutoff = 0.75)
+# filtering to remove correlated predictors
+trInit3 <- trInit2[ ,-highlyCorDescr]
+# checking for structure and dimensions
+dim(trInit3) # now we have 32 predictors total
+# str(trInit3)
+```
+
+The testing set was subsetted to remove these correlated predictors.
+
+```{r}
+# subsetting the testing set to drop the correlated predictors
+testInit3 <- testInit2[ ,-highlyCorDescr]
+# checking for structure and dimensions
+dim(testInit3) # 32 variables
+# str(testInit3)
+```
+
+
+## 2.4 Linear Dependencies
+
+
+
+# 2.4.1 checking for linear dependencies
+
+
+```{r}
+# subsetting for the numeric variables to check for linear dependencies
+comboInfo <- findLinearCombos(trInit3[,-32])
+comboInfo
+```
+
+Therefore, no linear dependencies are present in the dataframe.
+
+
+
+## 2.5 Using the preProcess function
+
+
+Next, the training data was standardized by applying centering and scaling methods in the preprocess function, and adjusted for skewness in the data by applying the YeoJohnson method (since data includes both positive and negative values).
+
+First, the object trInit2Obj is created, and then this is used on the training data to generate the updated parameters.
+
+```{r}
+trInit2Obj <- preProcess(trInit3[,-32], method = "center", "scale", "YeoJohnson")
+# the was created from 31 variables
+trInit2Obj
+# trInit2Preds <- predict(trInit2Obj, newdata = trInit2)
+# trInit3 <- data.frame(trInit2Preds, classe = trInit2[,37])
+#str(trInit3)
+# str(trInit2Preds)
+trInit4 <- predict(trInit2Obj, newdata = trInit3)
+str(trInit4)
+```
+
+Using the same object from the training set, the updated parameters on the testing data was generated.
+
+```{r}
+testInit4 <- predict(trInit2Obj, newdata = testInit3)
+str(testInit4)
+```
+
+(PreProcessing with pca was also looked into, but the resulting models did not have better accuracy than our best models without pca. These discussions have been omitted in this report)
+
+
+3. DATA-SPLITTING
+=================
+
+
+Nest, the training data was further split into "training" and "validation" sets, in order to make it possible to check the accuracy of the model on unseen data (validation set) before applying to the testing set.
+
+With training data trInit4:
+
+```{r}
+set.seed(123)
+trainValObj <- createDataPartition(trInit4$classe, p = 0.8, list = F)
+training <- trInit4[trainValObj, ]; validation <- trInit4[-trainValObj, ]
+dim(training); dim(validation)
+```
+
+Thus, trInit4 was split into training and validation sets.
+
+
+4. MODEL TRAINING
+=================
+
+The models were trained using the training set and evaluated  on the validation set(out-of-sample). Based on this out-of-sample accuracy, our models were rank-ordered. and the best one was used for predicting on the testing set.
+
+For training Control, 5-fold cross-validation has been used for all of the models (since 5-10 folds are considered optimal for cross-validation). Accuracy in the validation set was used as our metrics for evaluation of the models. For models with low accuracy, these were not used for predicting on the testing data.
+
+4.1 Gradient Boosting
+=====================
+
+gbm - with training
+
+```{r}
+set.seed(456)
+# using 5-fold cross-validation
+trCtrl <- trainControl(method = "cv", number = 5)
+# training on the training data
+gbmObj <- train(classe~., data = training, method = "gbm", trControl = trCtrl, verbose = FALSE)
+# predicting on the validation set (out-of-sample)
+gbmPred <- predict(gbmObj, newdata = validation)
+# checking for accuracy on the validation data (determining out-of-sample accuracy)
+confusionMatrix(gbmPred, validation$classe)  # 5 mins; Accuracy : 0.9457
+```
+
+Using gbm, our out-of-sample Accuracy was 0.9457. 
+Therefore our out-of-sample error = (1 - Accuracy) = 0.0543
+
+Predicting on our testing set: 
+
+```{r}
+testPred4gbm <- predict(gbmObj, newdata = testInit4[ ,-32])
+testPred4gbm
+# Result: C A B A A E D B A A B C B A E E A B A B
+```
+
+4.2 Random Forests
+==================
+
+
+```{r}
+set.seed(456)
+# using 5-fold cross-validation
+trCtrl <- trainControl(method = "cv", number = 5)
+# training on the training data
+rfObj <- train(classe~., data = training, method = "rf", trControl = trCtrl)
+# predicting on the validation set (out-of-sample)
+rfPred <- predict(rfObj, newdata = validation)
+# checking for accuracy on the validation data (determining out-of-sample accuracy)
+confusionMatrix(rfPred, validation$classe)
+# 15 mins; Accuracy : 0.9946 
+```
+
+Using Random Forests, our out-of-sample Accuracy is 0.9946. 
+Therefore our out-of-sample error = (1 - Accuracy) = 0.0054.
+
+Predicting on our testing set: 
+
+```{r}
+testPred4rf <- predict(rfObj, newdata = testInit4[,-32])
+testPred4rf
+# Results: B A B A A E D B A A B C B A E E A B B B 
+```
+
+
+4.3 Linear Discriminant Analysis
+================================
+
+
+```{r}
+set.seed(456)
+trCtrl <- trainControl(method = "cv", number = 5)
+ldaObj <- train(classe~., data = training, method = "lda", trControl = trCtrl)
+ldaPred <- predict(ldaObj, newdata = validation)
+confusionMatrix(ldaPred, validation$classe)
+# less than a minute but Accuracy : 0.5827
+```
+
+Since Accuracy is low, this model is not considered further.
+
+
+4.4 Support Vector Machine
+==========================
+
+svm - with training
+
+```{r}
+library(e1071)
+set.seed(456)
+svmObj <- svm(classe~., data = training)
+svmPred <- predict(svmObj, newdata = validation)
+confusionMatrix(svmPred, validation$classe)
+# fairly quick; Accuracy : 0.9421
+```
+
+Using svm, our out-of-sample Accuracy is 0.9421. 
+Therefore our out-of-sample error = (1 - Accuracy) = 0.0579
+
+Predicting on our testing set: 
+
+```{r}
+testPred4svm <- predict(svmObj, newdata = testInit4[,-32])
+testPred4svm
+# Results: B  A  B  A  A  E  D  B  A  A  B  C  B  A  E  E  A  B  B  B 
+```
+
+
+4.5 Naive Bayes
+===============
+
+
+```{r}
+set.seed(456)
+nbObj <- naiveBayes(classe~., data = training)
+# print(nbObj)
+nbPred <- predict(nbObj, newdata = validation)
+confusionMatrix(nbPred, validation$classe)
+# pretty quick, Accuracy : 0.5345
+```
+
+Since Accuracy is low, this model is not considered further.
+
+4.6. Trees
+==========
+rpart
+
+
+```{r}
+set.seed(456)
+trCtrl <- trainControl(method = "cv", number = 5)
+rpartObj <- train(classe~., data = training, method = "rpart", trControl = trCtrl)
+rpartPred <- predict(rpartObj, newdata = validation)
+confusionMatrix(rpartPred, validation$classe)
+# Pretty quick; Accuracy : 0.5187 
+```
+
+
+Since Accuracy is low, this model is not considered further.
+
+
+5. CONCLUSION
+=============
+
+
+A number of models were looked at for selecting our best model: Gradient Boosting, Random Forests, Linear Discriminant Analysis, Support Vector Machines, Naive Bayes, and Trees. 
+
+For the models 5-fold cross-validation was used, as 5-10 fold CV is considered optimal. The out of sample error is the error when predicting on the validation set. The model with the lowest error (i.e., highest out-of-sample Accuracy) was selected as our best model. 
+
+Accuracy in the validation set was used as the metrics for evaluating our models. Based on this, Random Forests gave the best results, with Accuracy of 0.9946, described in section C, 2 above. This model was used for predicting on the testing set, and led to all correct predictions for the testing sample of 20 observations.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
